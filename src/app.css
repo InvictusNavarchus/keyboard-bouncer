@@ -1,0 +1,107 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  /* Background layers */
+  --bg-void:   #06060e;
+  --bg-base:   #09091a;
+  --bg-panel:  #0d0d20;
+  --bg-raised:  #111128;
+  --bg-input:  #0a0a1e;
+
+  /* Borders */
+  --border-subtle:  #181830;
+  --border-base:    #1e1e3a;
+  --border-strong:  #2a2a50;
+  --border-active:  #3a3a80;
+
+  /* Text scale */
+  --text-void:    #2a2a48;
+  --text-dim:     #3d3d66;
+  --text-muted:   #5a5a8a;
+  --text-base:    #7a7ab0;
+  --text-soft:    #9898c8;
+  --text-bright:  #b8b8e8;
+  --text-white:   #d8d8ff;
+
+  /* Accent colors */
+  --blue:       #4466ff;
+  --blue-dim:   rgba(68, 102, 255, 0.12);
+  --blue-glow:  rgba(68, 102, 255, 0.25);
+
+  --cyan:       #22ddff;
+  --cyan-dim:   rgba(34, 221, 255, 0.10);
+
+  --green:      #22dd88;
+  --green-dim:  rgba(34, 221, 136, 0.10);
+
+  /* Signal colors */
+  --safe:       #22dd88;
+  --safe-dim:   rgba(34, 221, 136, 0.08);
+
+  --pause:      #44aaff;
+  --pause-dim:  rgba(68, 170, 255, 0.10);
+  --pause-border: rgba(68, 170, 255, 0.30);
+
+  --warn:       #ffaa22;
+  --warn-dim:   rgba(255, 170, 34, 0.08);
+  --warn-border: rgba(255, 170, 34, 0.35);
+
+  --danger:     #ff3355;
+  --danger-dim:   rgba(255, 51, 85, 0.08);
+  --danger-border: rgba(255, 51, 85, 0.40);
+  --danger-glow:   rgba(255, 51, 85, 0.20);
+
+  /* Typography */
+  --font: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+
+  /* Layout */
+  --header-h: 52px;
+  --chart-h: 80px;
+  --log-w: 400px;
+  --radius: 3px;
+  --radius-md: 5px;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg-void);
+  color: var(--text-base);
+  font-size: 12px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-active);
+}
+
+/* Selections */
+::selection {
+  background: var(--blue-dim);
+  color: var(--text-white);
+}
