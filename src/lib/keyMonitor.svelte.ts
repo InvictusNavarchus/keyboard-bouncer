@@ -56,9 +56,18 @@ export class KeyMonitor {
    */
   ikiWindow = $state<number[]>([]);
 
+  /**
+   * Per-key rolling windows of IKI values (ms).
+   * Each key code (e.g., 'KeyA', 'Space') has its own history.
+   */
+  ikiWindowByCode = $state<Map<string, number[]>>(new Map());
+
   // ── Derived stats ────────────────────────────────────────────────────────
 
-  ikiStats = $derived.by<IKIStats | null>(() => {
+  /**
+   * Global IKI stats across all keys (for WPM display / chart).
+   */
+  globalIKIStats = $derived.by<IKIStats | null>(() => {
     const w = this.ikiWindow;
     if (w.length < MIN_SAMPLES) return null;
     const m = mean(w);
@@ -74,6 +83,8 @@ export class KeyMonitor {
       suspicionThreshold: threshold,
     };
   });
+
+  ikiStats = $derived.by(() => this.globalIKIStats);
 
   suspiciousCount = $derived.by(() =>
     this.events.filter(e => e.kind === 'keydown' && e.suspicionScore >= 0.5).length,
@@ -113,36 +124,45 @@ export class KeyMonitor {
 
     // Only include char-producing key intervals in the speed window
     if (iki !== null && producesChar) {
+      // Global window (for WPM display)
       this.ikiWindow.push(iki);
       if (this.ikiWindow.length > IKI_WINDOW_SIZE) {
         this.ikiWindow.shift();
       }
+      
+      // Per-key window (for per-key suspicion scoring)
+      const bucket = this.ikiWindowByCode.get(ev.code) ?? [];
+      bucket.push(iki);
+      if (bucket.length > IKI_WINDOW_SIZE) {
+        bucket.shift();
+      }
+      this.ikiWindowByCode.set(ev.code, bucket);
     }
 
     // ── Same-key double-down detection ───────────────────────────────────
     const isSameKeyDoubleDown = this.#activeKeys.has(ev.code);
 
     // ── Suspicion score ───────────────────────────────────────────────────
-    const stats = this.ikiStats;
+    const perKeyStats = this.#getPerKeyStats(ev.code);
     const suspicionScore =
       isSameKeyDoubleDown
         ? Math.max(
             computeSuspicionScore({
               iki: iki ?? 0,
-              meanIKI: stats?.mean ?? 0,
-              stdevIKI: stats?.stdev ?? 0,
+              meanIKI: perKeyStats.mean,
+              stdevIKI: perKeyStats.stdev,
               isSameKeyDoubleDown,
-              hasSufficientSamples: (stats?.sampleCount ?? 0) >= MIN_SAMPLES,
+              hasSufficientSamples: perKeyStats.sampleCount >= MIN_SAMPLES,
             }),
             0.85,
           )
         : iki !== null
           ? computeSuspicionScore({
               iki,
-              meanIKI: stats?.mean ?? 0,
-              stdevIKI: stats?.stdev ?? 0,
+              meanIKI: perKeyStats.mean,
+              stdevIKI: perKeyStats.stdev,
               isSameKeyDoubleDown,
-              hasSufficientSamples: (stats?.sampleCount ?? 0) >= MIN_SAMPLES,
+              hasSufficientSamples: perKeyStats.sampleCount >= MIN_SAMPLES,
             })
           : 0;
 
@@ -232,6 +252,7 @@ export class KeyMonitor {
     this.charRecords = [];
     this.typedText = '';
     this.ikiWindow = [];
+    this.ikiWindowByCode.clear();
     this.#activeKeys.clear();
     this.#lastKeydownTime = null;
     this.#charCounter = 0;
@@ -239,6 +260,30 @@ export class KeyMonitor {
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
+
+  /**
+   * Compute per-key IKI stats. Returns mean, stdev, and sampleCount for the given key code.
+   * Used for per-key suspicion scoring.
+   */
+  #getPerKeyStats(keyCode: string): { mean: number; stdev: number; sampleCount: number } {
+    const w = this.ikiWindowByCode.get(keyCode);
+    if (!w || w.length < MIN_SAMPLES) {
+      // Fall back to global stats when per-key sample is insufficient
+      const global = this.globalIKIStats;
+      return {
+        mean: global?.mean ?? 0,
+        stdev: global?.stdev ?? 0,
+        sampleCount: global?.sampleCount ?? 0,
+      };
+    }
+    const m = mean(w);
+    const s = stdev(w, m);
+    return {
+      mean: m,
+      stdev: s,
+      sampleCount: w.length,
+    };
+  }
 
   #makeCharRecord(
     char: string,
