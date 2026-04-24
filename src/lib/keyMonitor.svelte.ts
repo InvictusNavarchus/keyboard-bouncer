@@ -175,6 +175,7 @@ export class KeyMonitor {
       kuToKd,
       holdDuration: null,
       isBounce,
+      isAfterPause,
       charIndex,
     });
 
@@ -219,6 +220,7 @@ export class KeyMonitor {
       kuToKd: null,
       holdDuration,
       isBounce: false,
+      isAfterPause: false, // keyups do not start sessions
       charIndex: active.charIndex,
     });
   }

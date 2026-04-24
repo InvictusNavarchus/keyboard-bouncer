@@ -29,6 +29,8 @@ export interface KeyEventRecord {
    * True if kdToKd or kuToKd triggers bounce thresholds, or if a double-fire occurs.
    */
   readonly isBounce: boolean;
+  /** True if this is a keydown and the global gap since last keydown > PAUSE_THRESHOLD */
+  readonly isAfterPause: boolean;
   /** Index into charRecords if this event produced a visible character, else null */
   readonly charIndex: number | null;
 }
