@@ -1,5 +1,4 @@
-import type { CharRecord, IKIStats, KeyEventRecord } from './types.js';
-import { mean, stdev, ikiToWPM } from './stats.js';
+import type { CharRecord, KeyEventRecord } from './types.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -12,14 +11,7 @@ export const BOUNCE_THRESHOLD_MS = 25;
 /** Hardware chatter interval threshold (ms) for kdToKd */
 export const CHATTER_THRESHOLD_MS = 50;
 
-/** Rolling IKI window size — how many recent keystrokes to use for stats */
-const IKI_WINDOW_SIZE = 60;
 
-/** Minimum samples before the adaptive detector kicks in */
-const MIN_SAMPLES = 8;
-
-/** Z-score boundary for suspicion threshold display (mean - N*σ) */
-const THRESHOLD_STDEVS = 1.8;
 
 /**
  * Keys that don't produce characters and should be excluded from the IKI
@@ -56,45 +48,13 @@ export class KeyMonitor {
   /** The raw string the user has typed */
   typedText = $state<string>('');
 
-  /**
-   * Rolling window of recent IKI values (ms) from character-producing keydowns.
-   * Only intervals ≤ PAUSE_THRESHOLD_MS are included.
-   */
-  ikiWindow = $state<number[]>([]);
 
-  /**
-   * Per-key rolling windows of IKI values (ms).
-   * Each key code (e.g., 'KeyA', 'Space') has its own history.
-   */
-  ikiWindowByCode = $state<Map<string, number[]>>(new Map());
 
   // Remove watched concepts entirely
   // watchedKeyCode = $state<string | null>(null);
   // watchedKeyEvents = $state<WatchedKeyEvent[]>([]);
 
   // ── Derived stats ────────────────────────────────────────────────────────
-
-  /**
-   * Global IKI stats across all keys (for WPM display / chart).
-   */
-  globalIKIStats = $derived.by<IKIStats | null>(() => {
-    const w = this.ikiWindow;
-    if (w.length < MIN_SAMPLES) return null;
-    const m = mean(w);
-    const s = stdev(w, m);
-    const threshold = Math.max(m - THRESHOLD_STDEVS * s, 0);
-    return {
-      mean: m,
-      stdev: s,
-      min: Math.min(...w),
-      max: Math.max(...w),
-      sampleCount: w.length,
-      estimatedWPM: ikiToWPM(m),
-      suspicionThreshold: threshold,
-    };
-  });
-
-  ikiStats = $derived.by(() => this.globalIKIStats);
 
   suspiciousCount = $derived.by(() =>
     this.events.filter(e => e.kind === 'keydown' && e.isBounce).length,
@@ -123,33 +83,13 @@ export class KeyMonitor {
     const isNonChar = NON_CHAR_KEYS.has(ev.key);
     const producesChar = !isModified && !isNonChar && ev.key !== 'Backspace' && ev.key !== 'Tab';
 
-    // ── IKI calculation ──────────────────────────────────────────────────
-    let iki: number | null = null;
     let isAfterPause = true;
 
     if (this.#lastKeydownTime !== null) {
       const delta = now - this.#lastKeydownTime;
       if (delta <= PAUSE_THRESHOLD_MS) {
-        iki = delta;
         isAfterPause = false;
       }
-    }
-
-    // Only include char-producing key intervals in the speed window
-    if (iki !== null && producesChar) {
-      // Global window (for WPM display)
-      this.ikiWindow.push(iki);
-      if (this.ikiWindow.length > IKI_WINDOW_SIZE) {
-        this.ikiWindow.shift();
-      }
-      
-      // Per-key window (for per-key suspicion scoring)
-      const bucket = this.ikiWindowByCode.get(ev.code) ?? [];
-      bucket.push(iki);
-      if (bucket.length > IKI_WINDOW_SIZE) {
-        bucket.shift();
-      }
-      this.ikiWindowByCode.set(ev.code, bucket);
     }
 
     // ── Bounce computation ───────────────────────────────────────────────
@@ -261,8 +201,6 @@ export class KeyMonitor {
     this.events = [];
     this.charRecords = [];
     this.typedText = '';
-    this.ikiWindow = [];
-    this.ikiWindowByCode.clear();
 
     this.#lastPressTimes.clear();
     this.#lastReleaseTimes.clear();

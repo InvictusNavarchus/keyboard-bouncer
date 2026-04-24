@@ -48,16 +48,3 @@ export interface CharRecord {
   readonly isAfterPause: boolean;
 }
 
-/** Rolling statistics over recent IKI samples */
-export interface IKIStats {
-  readonly mean: number;
-  readonly stdev: number;
-  readonly min: number;
-  readonly max: number;
-  readonly sampleCount: number;
-  /** Estimated WPM derived from mean IKI (1 word = 5 chars) */
-  readonly estimatedWPM: number;
-  /** Lower bound below which a key is considered anomalously fast (mean - N*stdev) */
-  readonly suspicionThreshold: number;
-}
-

@@ -104,21 +104,7 @@
     return key;
   }
 
-  // ─── IKI Chart ──────────────────────────────────────────────────────────────
 
-  const CHART_W = 700;
-  const CHART_H = 54;
-  const BAR_SLOTS = 70;
-  const BAR_GAP = 1;
-  const BAR_W = CHART_W / BAR_SLOTS - BAR_GAP;
-
-  function getBarFill(iki: number, mean: number, stdev: number): string {
-    if (stdev === 0) return 'rgba(68,102,255,0.5)';
-    const z = (mean - iki) / stdev;
-    if (z < 1.5) return 'rgba(68,102,255,0.55)';
-    if (z < 2.5) return 'rgba(255,170,34,0.70)';
-    return 'rgba(255,51,85,0.80)';
-  }
 
   // ─── Events ─────────────────────────────────────────────────────────────────
 
@@ -186,44 +172,6 @@
     </div>
 
     <div class="stats-bar">
-      {#if monitor.ikiStats}
-        {@const s = monitor.ikiStats}
-        <div class="stat-block accent">
-          <span class="stat-val">{s.estimatedWPM}</span>
-          <span class="stat-key">WPM</span>
-        </div>
-        <div class="stat-sep"></div>
-        <div class="stat-block">
-          <span class="stat-val">{s.mean.toFixed(1)}</span>
-          <span class="stat-key">avg IKI ms</span>
-        </div>
-        <div class="stat-block">
-          <span class="stat-val">{s.stdev.toFixed(1)}</span>
-          <span class="stat-key">σ ms</span>
-        </div>
-        <div class="stat-block">
-          <span class="stat-val" class:danger-val={s.min < s.suspicionThreshold}>
-            {s.min.toFixed(1)}
-          </span>
-          <span class="stat-key">min IKI ms</span>
-        </div>
-        <div class="stat-block dimmer">
-          <span class="stat-val">{s.suspicionThreshold.toFixed(1)}</span>
-          <span class="stat-key">threshold ms</span>
-        </div>
-        <div class="stat-sep"></div>
-      {:else}
-        <div class="stat-block calibrating">
-          <span class="stat-key">
-            {#if monitor.ikiWindow.length === 0}
-              click the typing area and start typing…
-            {:else}
-              calibrating… {monitor.ikiWindow.length}/8 keystrokes
-            {/if}
-          </span>
-        </div>
-      {/if}
-
       <div class="stat-block" class:warn-val-block={monitor.suspiciousCount > 0}>
         <span class="stat-val" class:warn-val={monitor.suspiciousCount > 0}>
           {monitor.suspiciousCount}
@@ -385,87 +333,6 @@
       </div>
     </div>
 
-  </div>
-
-  <!-- ═══ CHART ════════════════════════════════════════════════════════════ -->
-  <div class="chart-panel">
-    <div class="chart-header">
-      <span class="panel-label">IKI TIMELINE</span>
-      <span class="chart-sub">
-        last {Math.min(monitor.ikiWindow.length, BAR_SLOTS)} keystrokes ·
-        <span style="color:var(--blue)">━</span> mean ·
-        <span style="color:var(--danger)">╌</span> suspicion threshold
-        {#if monitor.ikiStats}
-          · bars: <span style="color:rgba(68,102,255,0.8)">■</span> normal
-          <span style="color:rgba(255,170,34,0.85)">■</span> fast
-          <span style="color:rgba(255,51,85,0.9)">■</span> bounce
-        {/if}
-      </span>
-    </div>
-    <svg
-      class="iki-svg"
-      viewBox="0 0 {CHART_W} {CHART_H}"
-      preserveAspectRatio="none"
-      aria-label="IKI timeline chart"
-    >
-      {#if monitor.ikiStats && monitor.ikiWindow.length > 0}
-        {@const stats = monitor.ikiStats}
-        {@const recent = monitor.ikiWindow.slice(-BAR_SLOTS)}
-        {@const maxVal = Math.max(...recent, stats.mean + stats.stdev * 2.5, 80)}
-        {@const pxPerMs = CHART_H / maxVal}
-        {@const meanPx = CHART_H - stats.mean * pxPerMs}
-        {@const threshPx = CHART_H - stats.suspicionThreshold * pxPerMs}
-
-        <!-- Bars -->
-        {#each recent as iki, i}
-          {@const barH = Math.max(iki * pxPerMs, 2)}
-          {@const barX = i * (BAR_W + BAR_GAP)}
-          <rect
-            x={barX}
-            y={CHART_H - barH}
-            width={BAR_W}
-            height={barH}
-            fill={getBarFill(iki, stats.mean, stats.stdev)}
-            rx="1"
-          >
-            <title>{iki.toFixed(1)}ms</title>
-          </rect>
-        {/each}
-
-        <!-- Mean line -->
-        <line
-          x1="0" y1={meanPx} x2={CHART_W} y2={meanPx}
-          stroke="rgba(68,102,255,0.7)" stroke-width="1"
-        />
-        <text
-          x="4" y={meanPx - 3}
-          fill="rgba(68,102,255,0.6)" font-size="8"
-          font-family="JetBrains Mono, monospace"
-        >{stats.mean.toFixed(0)}ms</text>
-
-        <!-- Suspicion threshold line -->
-        {#if stats.suspicionThreshold > 0}
-          <line
-            x1="0" y1={threshPx} x2={CHART_W} y2={threshPx}
-            stroke="rgba(255,51,85,0.65)" stroke-width="1"
-            stroke-dasharray="5,3"
-          />
-          <text
-            x="4" y={threshPx - 3}
-            fill="rgba(255,51,85,0.55)" font-size="8"
-            font-family="JetBrains Mono, monospace"
-          >{stats.suspicionThreshold.toFixed(0)}ms</text>
-        {/if}
-      {:else}
-        <text
-          x={CHART_W / 2} y={CHART_H / 2 + 4}
-          fill="var(--text-void)"
-          font-size="11"
-          font-family="JetBrains Mono, monospace"
-          text-anchor="middle"
-        >type to populate chart…</text>
-      {/if}
-    </svg>
   </div>
 
   <!-- ═══ KEY WATCHER (Removed) ══════════════════════════════════════════ -->
@@ -900,31 +767,5 @@
 
   .log-warn  .l-flag { color: var(--warn); }
   .log-pause .l-flag { color: var(--pause); }
-
-  /* ── Chart ───────────────────────────────────────────────────────────── */
-  .chart-panel {
-    border-top: 1px solid var(--border-base);
-    background: var(--bg-panel);
-    flex-shrink: 0;
-    padding: 7px 16px 10px;
-  }
-
-  .chart-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 6px;
-  }
-
-  .chart-sub {
-    font-size: 9.5px;
-    color: var(--text-dim);
-  }
-
-  .iki-svg {
-    width: 100%;
-    height: 54px;
-    display: block;
-  }
 
 </style>
