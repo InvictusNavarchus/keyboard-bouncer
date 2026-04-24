@@ -64,6 +64,32 @@ export class KeyMonitor {
     this.events.filter(e => e.kind === 'keydown' && e.isBounce).length,
   );
 
+  /**
+   * Ranked list of hardware keys that have triggered bounce/chatter detection.
+   */
+  suspectKeys = $derived.by(() => {
+    const stats = new Map<string, { key: string; bounces: number; total: number }>();
+    for (const ev of this.events) {
+      if (ev.kind === 'keydown') {
+        const entry = stats.get(ev.code) || { key: ev.key, bounces: 0, total: 0 };
+        entry.total += 1;
+        if (ev.isBounce) {
+          entry.bounces += 1;
+        }
+        stats.set(ev.code, entry);
+      }
+    }
+    return Array.from(stats.entries())
+      .map(([code, val]) => ({
+        code,
+        key: val.key,
+        bounces: val.bounces,
+        total: val.total,
+      }))
+      .filter(k => k.bounces > 0)
+      .sort((a, b) => b.bounces - a.bounces);
+  });
+
   // ── Private internal state (non-reactive) ────────────────────────────────
 
   #activeKeys = new Map<string, ActiveKeyInfo>();
