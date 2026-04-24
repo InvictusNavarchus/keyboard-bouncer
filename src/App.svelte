@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { KeyMonitor, PAUSE_THRESHOLD_MS } from './lib/keyMonitor.svelte.js';
-  import type { CharRecord, KeyEventRecord, WatchedKeyEvent } from './lib/types.js';
+  import type { CharRecord, KeyEventRecord } from './lib/types.js';
 
   // ─── State ─────────────────────────────────────────────────────────────────
 
@@ -12,17 +12,14 @@
   let suspiciousOnly = $state(false);
 
   let logScrollEl = $state<HTMLElement | undefined>(undefined);
-  let watchScrollEl = $state<HTMLElement | undefined>(undefined);
   let typingEl = $state<HTMLElement | undefined>(undefined);
-
-  let watchCapturing = $state(false);
 
   // ─── Derived display data ───────────────────────────────────────────────────
 
   const visibleEvents = $derived(
     monitor.events.filter(ev => {
       if (!showKeyups && ev.kind === 'keyup') return false;
-      if (suspiciousOnly && ev.suspicionScore < 0.5 && !ev.isSameKeyDoubleDown) return false;
+      if (suspiciousOnly && !ev.isBounce) return false;
       return true;
     }),
   );
@@ -37,15 +34,7 @@
     });
   });
 
-  // Auto-scroll watch log on new events
-  $effect(() => {
-    void monitor.watchedKeyEvents.length;
-    tick().then(() => {
-      if (watchScrollEl) {
-        watchScrollEl.scrollTop = watchScrollEl.scrollHeight;
-      }
-    });
-  });
+
 
   // ─── Char coloring ──────────────────────────────────────────────────────────
 
@@ -53,33 +42,22 @@
     if (r.isAfterPause) {
       return 'color: var(--pause);';
     }
-    if (r.isSameKeyDoubleDown && r.suspicionScore >= 0.8) {
+    if (r.isBounce) {
       return [
         'color: var(--danger);',
         'text-shadow: 0 0 12px rgba(255,51,85,0.7), 0 0 24px rgba(255,51,85,0.3);',
         'font-weight: 700;',
       ].join(' ');
     }
-    const score = r.suspicionScore;
-    if (score <= 0.02) return 'color: var(--text-soft);';
-
-    // Interpolate: amber (40°) → orange (20°) → red (0°)
-    const h = Math.round(40 * (1 - score));
-    const s = Math.round(75 + 20 * score);
-    const l = Math.round(62 - 8 * score);
-    const glowStrength = score > 0.5 ? Math.round(4 + score * 10) : 0;
-    const glow = glowStrength > 0
-      ? ` text-shadow: 0 0 ${glowStrength}px hsl(${h}, ${s}%, ${Math.round(l * 0.75)}%);`
-      : '';
-    return `color: hsl(${h}, ${s}%, ${l}%);${glow}`;
+    return 'color: var(--text-soft);';
   }
 
   function getCharTitle(r: CharRecord): string {
     const parts: string[] = [];
-    if (r.iki !== null) parts.push(`IKI: ${r.iki.toFixed(1)}ms`);
-    else parts.push('First keystroke / after pause');
-    parts.push(`Score: ${(r.suspicionScore * 100).toFixed(0)}%`);
-    if (r.isSameKeyDoubleDown) parts.push('⚡ SAME-KEY DOUBLE-DOWN');
+    if (r.kdToKd !== null) parts.push(`KD→KD: ${r.kdToKd.toFixed(1)}ms`);
+    if (r.kuToKd !== null) parts.push(`KU→KD: ${r.kuToKd.toFixed(1)}ms`);
+    if (r.kdToKd === null) parts.push('First keystroke / after pause');
+    if (r.isBounce) parts.push('⚡ BOUNCE');
     if (r.holdDuration !== null) parts.push(`Hold: ${r.holdDuration.toFixed(1)}ms`);
     return parts.join(' · ');
   }
@@ -89,19 +67,15 @@
   type LogClass = 'normal' | 'keyup' | 'pause' | 'warn' | 'danger';
 
   function getLogClass(ev: KeyEventRecord): LogClass {
-    if (ev.isSameKeyDoubleDown) return 'danger';
-    if (ev.suspicionScore >= 0.7) return 'danger';
-    if (ev.suspicionScore >= 0.35) return 'warn';
+    if (ev.isBounce) return 'danger';
     if (ev.kind === 'keyup') return 'keyup';
-    if (ev.iki === null && ev.kind === 'keydown') return 'pause';
+    if (ev.kdToKd === null && ev.kind === 'keydown') return 'pause';
     return 'normal';
   }
 
   function getSuspicionLabel(ev: KeyEventRecord): string {
-    if (ev.isSameKeyDoubleDown) return '⚡ DOUBLE FIRE';
-    if (ev.suspicionScore >= 0.7) return '⚠ BOUNCE?';
-    if (ev.suspicionScore >= 0.35) return '~ fast';
-    if (ev.iki === null && ev.kind === 'keydown') return '↵ new session';
+    if (ev.isBounce) return '⚡ BOUNCE';
+    if (ev.kdToKd === null && ev.kind === 'keydown') return '↵ new session';
     return '';
   }
 
@@ -153,70 +127,22 @@
     monitor.handleKeydown(e);
   }
 
-  // ─── Key watcher capture ────────────────────────────────────────────────────
-
-  function startWatchCapture() {
-    watchCapturing = true;
-    window.addEventListener(
-      'keydown',
-      (e: KeyboardEvent) => {
-        if (e.key === 'Escape') {
-          watchCapturing = false;
-          tick().then(() => typingEl?.focus());
-          return;
-        }
-        // Intercept during capture phase so the key isn't also typed into the textarea
-        e.stopPropagation();
-        monitor.setWatchedKey(e.code);
-        watchCapturing = false;
-        tick().then(() => typingEl?.focus());
-      },
-      { capture: true, once: true },
-    );
-  }
-
-  // ─── Watch row helpers ──────────────────────────────────────────────────────
-
-  function getWatchClass(ev: WatchedKeyEvent): string {
-    if (ev.kind === 'keyup') return 'watch-keyup';
-    if (ev.kuToKd !== null && ev.kuToKd < 20) return 'watch-bounce';
-    if (ev.kuToKd !== null && ev.kuToKd < 50) return 'watch-warn';
-    if (ev.kdToKd !== null && ev.kdToKd < 25) return 'watch-bounce';
-    return 'watch-normal';
-  }
-
-  function fmtWatchFlag(ev: WatchedKeyEvent): string {
-    if (ev.kind === 'keyup') return '';
-    if (ev.kuToKd !== null && ev.kuToKd < 20) return '⚡ BOUNCE';
-    if (ev.kuToKd !== null && ev.kuToKd < 50) return '~ suspicious';
-    if (ev.kdToKd !== null && ev.kdToKd < 25) return '⚡ BOUNCE';
-    return '';
-  }
+  // ─── Watched key tracker dependencies (removed) ─────────────────────────────
 
   let isCopied = $state(false);
 
   async function copyDataToClipboard() {
-    const globalCsvLines = ['time,kind,key,code,iki_ms,hold_ms,flag'];
+    const globalCsvLines = ['time,kind,key,code,kd_to_kd_ms,ku_to_kd_ms,hold_ms,flag'];
     for (const ev of monitor.events) {
       const time = fmtWallTime(ev.wallTime);
       const kind = ev.kind === 'keydown' ? 'DN' : 'UP';
       const key = fmtKey(ev.key).replace(/"/g, '""');
       const code = ev.code;
-      const iki = ev.iki !== null ? ev.iki.toFixed(1) : '';
-      const hold = ev.holdDuration !== null ? ev.holdDuration.toFixed(1) : '';
-      const flag = getSuspicionLabel(ev).replace(/"/g, '""');
-      globalCsvLines.push(`"${time}","${kind}","${key}","${code}","${iki}","${hold}","${flag}"`);
-    }
-
-    const watchedCsvLines = ['time,kind,kd_to_kd_ms,ku_to_kd_ms,hold_ms,flag'];
-    for (const ev of monitor.watchedKeyEvents) {
-      const time = fmtWallTime(ev.wallTime);
-      const kind = ev.kind === 'keydown' ? 'DN' : 'UP';
       const kdToKd = ev.kdToKd !== null ? ev.kdToKd.toFixed(1) : '';
       const kuToKd = ev.kuToKd !== null ? ev.kuToKd.toFixed(1) : '';
       const hold = ev.holdDuration !== null ? ev.holdDuration.toFixed(1) : '';
-      const flag = fmtWatchFlag(ev).replace(/"/g, '""');
-      watchedCsvLines.push(`"${time}","${kind}","${kdToKd}","${kuToKd}","${hold}","${flag}"`);
+      const flag = getSuspicionLabel(ev).replace(/"/g, '""');
+      globalCsvLines.push(`"${time}","${kind}","${key}","${code}","${kdToKd}","${kuToKd}","${hold}","${flag}"`);
     }
 
     const markdownParts = [
@@ -228,22 +154,6 @@
       '```',
       ''
     ];
-
-    if (monitor.watchedKeyCode) {
-      markdownParts.push(
-        `## Watched Key Event Log (${monitor.watchedKeyCode})`,
-        '```csv',
-        watchedCsvLines.join('\n'),
-        '```',
-        ''
-      );
-    } else {
-      markdownParts.push(
-        '## Watched Key Event Log',
-        '*No key watch feature was active during this recording.*',
-        ''
-      );
-    }
 
     const text = markdownParts.join('\n');
     try {
@@ -383,8 +293,7 @@
               <!-- svelte-ignore a11y_mouse_events_have_key_events -->
               <span
                 class="char"
-                class:char-suspicious={rec.suspicionScore >= 0.5}
-                class:char-double={rec.isSameKeyDoubleDown}
+                class:char-double={rec.isBounce}
                 class:char-pause={rec.isAfterPause}
                 style={getCharStyle(rec)}
                 title={getCharTitle(rec)}
@@ -463,7 +372,7 @@
               <span class="l-key">{fmtKey(ev.key)}</span>
               <span class="l-code">{ev.code}</span>
               {#if ev.kind === 'keydown'}
-                <span class="l-iki">{fmtMS(ev.iki)}ms</span>
+                <span class="l-iki">KD:{fmtMS(ev.kdToKd)}ms KU:{fmtMS(ev.kuToKd)}ms</span>
               {:else}
                 <span class="l-hold">h:{fmtMS(ev.holdDuration)}ms</span>
               {/if}
@@ -559,79 +468,7 @@
     </svg>
   </div>
 
-  <!-- ═══ KEY WATCHER ══════════════════════════════════════════════════════ -->
-  <div class="watch-panel">
-    <div class="panel-head watch-head">
-      <span class="panel-label">KEY WATCHER</span>
-
-      {#if monitor.watchedKeyCode}
-        <span class="watch-badge">
-          {monitor.watchedKeyCode}
-          <button class="watch-badge-x" onclick={() => monitor.clearWatchedKey()}>×</button>
-        </span>
-      {/if}
-
-      {#if watchCapturing}
-        <span class="watch-capturing">press any key… (Esc to cancel)</span>
-      {:else}
-        <button class="btn-watch" onclick={startWatchCapture}>
-          {monitor.watchedKeyCode ? '⊙ Change Key' : '⊙ Set Watch Key'}
-        </button>
-      {/if}
-
-      {#if monitor.watchedKeyCode}
-        <span class="watch-hint">
-          KD→KD: keydown interval · KU→KD: release-to-refire gap · bounce if KU→KD &lt; 20ms
-        </span>
-      {/if}
-    </div>
-
-    {#if monitor.watchedKeyCode}
-      <div class="watch-scroll" bind:this={watchScrollEl}>
-        {#if monitor.watchedKeyEvents.length === 0}
-          <div class="log-empty">
-            Watching <strong>{monitor.watchedKeyCode}</strong> — press the key to record events…
-          </div>
-        {:else}
-          <div class="watch-header-row">
-            <span>Time</span>
-            <span>↕</span>
-            <span>KD→KD</span>
-            <span>KU→KD</span>
-            <span>Hold</span>
-            <span></span>
-          </div>
-          {#each monitor.watchedKeyEvents as ev (ev.id)}
-            {@const cls = getWatchClass(ev)}
-            {@const flag = fmtWatchFlag(ev)}
-            <div
-              class="watch-row"
-              class:watch-normal={cls === 'watch-normal'}
-              class:watch-keyup={cls === 'watch-keyup'}
-              class:watch-warn={cls === 'watch-warn'}
-              class:watch-bounce={cls === 'watch-bounce'}
-            >
-              <span class="l-time">{fmtWallTime(ev.wallTime)}</span>
-              <span class="l-arrow">{ev.kind === 'keydown' ? '↓' : '↑'}</span>
-              <span class="w-kdkd">{ev.kdToKd !== null ? `${ev.kdToKd.toFixed(1)}ms` : '—'}</span>
-              <span class="w-kukd">{ev.kuToKd !== null ? `${ev.kuToKd.toFixed(1)}ms` : '—'}</span>
-              <span class="w-hold">{ev.holdDuration !== null ? `${ev.holdDuration.toFixed(1)}ms` : '—'}</span>
-              {#if flag}
-                <span class="l-flag">{flag}</span>
-              {:else}
-                <span></span>
-              {/if}
-            </div>
-          {/each}
-        {/if}
-      </div>
-    {:else}
-      <div class="watch-empty">
-        No key selected — click <strong>Set Watch Key</strong> then press the suspected key.
-        Tracks KD→KD (keydown-to-keydown) and KU→KD (release-to-refire) timing for that key only.
-      </div>
-    {/if}
-  </div>
+  <!-- ═══ KEY WATCHER (Removed) ══════════════════════════════════════════ -->
 
 </div>
 
@@ -1090,140 +927,4 @@
     display: block;
   }
 
-  /* ── Key Watcher panel ───────────────────────────────────────────────── */
-  .watch-panel {
-    border-top: 1px solid var(--border-base);
-    background: var(--bg-panel);
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    max-height: 190px;
-  }
-
-  .watch-head {
-    gap: 8px;
-    flex-wrap: nowrap;
-  }
-
-  .watch-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    background: var(--blue-dim);
-    border: 1px solid rgba(68, 102, 255, 0.35);
-    border-radius: var(--radius);
-    padding: 1px 6px 1px 8px;
-    font-size: 10px;
-    color: var(--blue);
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    flex-shrink: 0;
-  }
-
-  .watch-badge-x {
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: var(--text-muted);
-    font-size: 14px;
-    line-height: 1;
-    padding: 0 2px;
-    transition: color 0.15s;
-  }
-
-  .watch-badge-x:hover { color: var(--danger); }
-
-  .watch-capturing {
-    font-size: 10px;
-    color: var(--warn);
-    font-weight: 600;
-    animation: pulse-online 0.8s ease-in-out infinite;
-    flex-shrink: 0;
-  }
-
-  .btn-watch {
-    padding: 3px 10px;
-    background: transparent;
-    border: 1px solid var(--border-base);
-    border-radius: var(--radius);
-    color: var(--text-muted);
-    font-family: var(--font);
-    font-size: 10px;
-    cursor: pointer;
-    transition: border-color 0.15s, color 0.15s;
-    flex-shrink: 0;
-  }
-
-  .btn-watch:hover {
-    border-color: var(--blue);
-    color: var(--blue);
-  }
-
-  .watch-hint {
-    font-size: 9px;
-    color: var(--text-dim);
-    margin-left: auto;
-    font-style: italic;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .watch-empty {
-    padding: 8px 16px;
-    color: var(--text-void);
-    font-size: 10.5px;
-    font-style: italic;
-  }
-
-  .watch-empty strong { color: var(--text-dim); font-style: normal; }
-
-  .watch-scroll {
-    flex: 1;
-    overflow-y: auto;
-    min-height: 0;
-  }
-
-  .watch-header-row {
-    display: grid;
-    grid-template-columns: 82px 14px 78px 78px 72px 1fr;
-    gap: 5px;
-    padding: 3px 10px 3px 8px;
-    border-bottom: 1px solid var(--border-subtle);
-    font-size: 8.5px;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    background: var(--bg-raised);
-    position: sticky;
-    top: 0;
-    z-index: 1;
-  }
-
-  .watch-row {
-    display: grid;
-    grid-template-columns: 82px 14px 78px 78px 72px 1fr;
-    align-items: center;
-    gap: 5px;
-    padding: 2px 10px 2px 8px;
-    border-left: 2px solid transparent;
-    border-bottom: 1px solid var(--bg-base);
-    font-size: 10.5px;
-    min-height: 20px;
-    transition: background 0.1s;
-  }
-
-  .watch-row:hover { background: rgba(255, 255, 255, 0.015); }
-
-  .watch-normal { border-left-color: transparent; }
-  .watch-keyup  { border-left-color: transparent; opacity: 0.38; }
-  .watch-warn   { border-left-color: var(--warn-border);    background: var(--warn-dim); }
-  .watch-bounce { border-left-color: var(--danger-border);  background: var(--danger-dim); }
-
-  .w-kdkd { color: var(--text-muted); font-size: 10px; }
-  .w-kukd { color: var(--text-bright); font-size: 10px; font-weight: 600; }
-  .w-hold { color: var(--text-dim); font-size: 9.5px; }
-
-  .watch-bounce .w-kukd { color: var(--danger); }
-  .watch-warn   .w-kukd { color: var(--warn); }
 </style>

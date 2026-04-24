@@ -1,10 +1,16 @@
-import type { CharRecord, IKIStats, KeyEventRecord, WatchedKeyEvent } from './types.js';
-import { mean, stdev, computeSuspicionScore, ikiToWPM } from './stats.js';
+import type { CharRecord, IKIStats, KeyEventRecord } from './types.js';
+import { mean, stdev, ikiToWPM } from './stats.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 /** Gaps longer than this (ms) are treated as a typing session reset */
 export const PAUSE_THRESHOLD_MS = 500;
+
+/** Hardware bounce interval threshold (ms) for kuToKd */
+export const BOUNCE_THRESHOLD_MS = 25;
+
+/** Hardware chatter interval threshold (ms) for kdToKd */
+export const CHATTER_THRESHOLD_MS = 50;
 
 /** Rolling IKI window size — how many recent keystrokes to use for stats */
 const IKI_WINDOW_SIZE = 60;
@@ -62,11 +68,9 @@ export class KeyMonitor {
    */
   ikiWindowByCode = $state<Map<string, number[]>>(new Map());
 
-  /** The key code currently being watched (e.g. 'Space', 'KeyA'), or null if none. */
-  watchedKeyCode = $state<string | null>(null);
-
-  /** All events recorded for the watched key, in chronological order. */
-  watchedKeyEvents = $state<WatchedKeyEvent[]>([]);
+  // Remove watched concepts entirely
+  // watchedKeyCode = $state<string | null>(null);
+  // watchedKeyEvents = $state<WatchedKeyEvent[]>([]);
 
   // ── Derived stats ────────────────────────────────────────────────────────
 
@@ -93,22 +97,22 @@ export class KeyMonitor {
   ikiStats = $derived.by(() => this.globalIKIStats);
 
   suspiciousCount = $derived.by(() =>
-    this.events.filter(e => e.kind === 'keydown' && e.suspicionScore >= 0.5).length,
+    this.events.filter(e => e.kind === 'keydown' && e.isBounce).length,
   );
 
   doubleFireCount = $derived.by(() =>
-    this.events.filter(e => e.isSameKeyDoubleDown).length,
+    this.events.filter(e => e.kind === 'keydown' && e.isBounce).length,
   );
 
   // ── Private internal state (non-reactive) ────────────────────────────────
 
   #activeKeys = new Map<string, ActiveKeyInfo>();
+  #lastReleaseTimes = new Map<string, number>();
+  #lastPressTimes = new Map<string, number>();
+
   #lastKeydownTime: number | null = null;
   #charCounter = 0;
   #eventCounter = 0;
-  #watchedLastKeydownTime: number | null = null;
-  #watchedLastKeyupTime: number | null = null;
-  #watchedEventCounter = 0;
 
   // ── Public methods ────────────────────────────────────────────────────────
 
@@ -148,32 +152,26 @@ export class KeyMonitor {
       this.ikiWindowByCode.set(ev.code, bucket);
     }
 
-    // ── Same-key double-down detection ───────────────────────────────────
-    const isSameKeyDoubleDown = this.#activeKeys.has(ev.code);
+    // ── Bounce computation ───────────────────────────────────────────────
+    const lastPress = this.#lastPressTimes.get(ev.code) ?? null;
+    const lastRelease = this.#lastReleaseTimes.get(ev.code) ?? null;
 
-    // ── Suspicion score ───────────────────────────────────────────────────
-    const perKeyStats = this.#getPerKeyStats(ev.code);
-    const suspicionScore =
-      isSameKeyDoubleDown
-        ? Math.max(
-            computeSuspicionScore({
-              iki: iki ?? 0,
-              meanIKI: perKeyStats.mean,
-              stdevIKI: perKeyStats.stdev,
-              isSameKeyDoubleDown,
-              hasSufficientSamples: perKeyStats.sampleCount >= MIN_SAMPLES,
-            }),
-            0.85,
-          )
-        : iki !== null
-          ? computeSuspicionScore({
-              iki,
-              meanIKI: perKeyStats.mean,
-              stdevIKI: perKeyStats.stdev,
-              isSameKeyDoubleDown,
-              hasSufficientSamples: perKeyStats.sampleCount >= MIN_SAMPLES,
-            })
-          : 0;
+    // Gap since same key was pressed
+    const kdToKd = lastPress !== null ? now - lastPress : null;
+    
+    // Gap since same key was released 
+    // ONLY valid if the release actually happened AFTER the previous press.
+    const isDoubleFire = this.#activeKeys.has(ev.code);
+    const kuToKd = (!isDoubleFire && lastRelease !== null && lastPress !== null && lastRelease > lastPress)
+      ? now - lastRelease
+      : null;
+
+    // Determine bounce rigidly
+    const isBounce = isDoubleFire || 
+                     (kuToKd !== null && kuToKd < BOUNCE_THRESHOLD_MS) || 
+                     (kdToKd !== null && kdToKd < CHATTER_THRESHOLD_MS);
+
+    this.#lastPressTimes.set(ev.code, now);
 
     // ── Handle text editing ───────────────────────────────────────────────
     let charIndex: number | null = null;
@@ -188,13 +186,13 @@ export class KeyMonitor {
         charIndex = this.#charCounter++;
         this.typedText += '\n';
         this.charRecords.push(
-          this.#makeCharRecord('\n', charIndex, now, iki, isSameKeyDoubleDown, suspicionScore, isAfterPause),
+          this.#makeCharRecord('\n', charIndex, now, kdToKd, kuToKd, isBounce, isAfterPause),
         );
       } else if (producesChar && ev.key.length === 1) {
         charIndex = this.#charCounter++;
         this.typedText += ev.key;
         this.charRecords.push(
-          this.#makeCharRecord(ev.key, charIndex, now, iki, isSameKeyDoubleDown, suspicionScore, isAfterPause),
+          this.#makeCharRecord(ev.key, charIndex, now, kdToKd, kuToKd, isBounce, isAfterPause),
         );
       }
     }
@@ -207,10 +205,10 @@ export class KeyMonitor {
       code: ev.code,
       timestamp: now,
       wallTime: Date.now(),
-      iki,
+      kdToKd,
+      kuToKd,
       holdDuration: null,
-      isSameKeyDoubleDown,
-      suspicionScore,
+      isBounce,
       charIndex,
     });
 
@@ -218,26 +216,6 @@ export class KeyMonitor {
     this.#activeKeys.set(ev.code, { keydownTimestamp: now, charIndex });
     if (producesChar) {
       this.#lastKeydownTime = now;
-    }
-
-    // ── Watched key tracking ──────────────────────────────────────────────
-    if (this.watchedKeyCode !== null && ev.code === this.watchedKeyCode) {
-      const kdToKd = this.#watchedLastKeydownTime !== null
-        ? now - this.#watchedLastKeydownTime
-        : null;
-      const kuToKd = this.#watchedLastKeyupTime !== null
-        ? now - this.#watchedLastKeyupTime
-        : null;
-      this.watchedKeyEvents.push({
-        id: `w-kd-${this.#watchedEventCounter++}`,
-        kind: 'keydown',
-        timestamp: now,
-        wallTime: Date.now(),
-        kdToKd,
-        kuToKd,
-        holdDuration: null,
-      });
-      this.#watchedLastKeydownTime = now;
     }
   }
 
@@ -260,6 +238,9 @@ export class KeyMonitor {
       }
     }
 
+    // ── Update tracking state ─────────────────────────────────────────────
+    this.#lastReleaseTimes.set(ev.code, now);
+
     // Record the keyup event
     this.events.push({
       id: `ku-${this.#eventCounter++}`,
@@ -268,26 +249,12 @@ export class KeyMonitor {
       code: ev.code,
       timestamp: now,
       wallTime: Date.now(),
-      iki: null,
+      kdToKd: null,
+      kuToKd: null,
       holdDuration,
-      isSameKeyDoubleDown: false,
-      suspicionScore: 0,
+      isBounce: false,
       charIndex: active.charIndex,
     });
-
-    // ── Watched key tracking ──────────────────────────────────────────────
-    if (this.watchedKeyCode !== null && ev.code === this.watchedKeyCode) {
-      this.watchedKeyEvents.push({
-        id: `w-ku-${this.#watchedEventCounter++}`,
-        kind: 'keyup',
-        timestamp: now,
-        wallTime: Date.now(),
-        kdToKd: null,
-        kuToKd: null,
-        holdDuration,
-      });
-      this.#watchedLastKeyupTime = now;
-    }
   }
 
   clear(): void {
@@ -296,65 +263,25 @@ export class KeyMonitor {
     this.typedText = '';
     this.ikiWindow = [];
     this.ikiWindowByCode.clear();
-    this.watchedKeyEvents = [];
-    this.#watchedLastKeydownTime = null;
-    this.#watchedLastKeyupTime = null;
-    // Note: watchedKeyCode intentionally not reset — user keeps their watch across session clears
+
+    this.#lastPressTimes.clear();
+    this.#lastReleaseTimes.clear();
+
     this.#activeKeys.clear();
     this.#lastKeydownTime = null;
     this.#charCounter = 0;
     // Note: #eventCounter intentionally not reset — IDs stay unique across sessions
   }
 
-  /** Start watching a specific key by its code (e.g. 'Space', 'KeyA'). Clears prior watch data. */
-  setWatchedKey(code: string): void {
-    this.watchedKeyCode = code;
-    this.watchedKeyEvents = [];
-    this.#watchedLastKeydownTime = null;
-    this.#watchedLastKeyupTime = null;
-  }
-
-  /** Stop watching and discard all watch data. */
-  clearWatchedKey(): void {
-    this.watchedKeyCode = null;
-    this.watchedKeyEvents = [];
-    this.#watchedLastKeydownTime = null;
-    this.#watchedLastKeyupTime = null;
-  }
-
   // ── Private helpers ───────────────────────────────────────────────────────
-
-  /**
-   * Compute per-key IKI stats. Returns mean, stdev, and sampleCount for the given key code.
-   * Used for per-key suspicion scoring.
-   */
-  #getPerKeyStats(keyCode: string): { mean: number; stdev: number; sampleCount: number } {
-    const w = this.ikiWindowByCode.get(keyCode);
-    if (!w || w.length < MIN_SAMPLES) {
-      // Fall back to global stats when per-key sample is insufficient
-      const global = this.globalIKIStats;
-      return {
-        mean: global?.mean ?? 0,
-        stdev: global?.stdev ?? 0,
-        sampleCount: global?.sampleCount ?? 0,
-      };
-    }
-    const m = mean(w);
-    const s = stdev(w, m);
-    return {
-      mean: m,
-      stdev: s,
-      sampleCount: w.length,
-    };
-  }
 
   #makeCharRecord(
     char: string,
     charIndex: number,
     keydownAt: number,
-    iki: number | null,
-    isSameKeyDoubleDown: boolean,
-    suspicionScore: number,
+    kdToKd: number | null,
+    kuToKd: number | null,
+    isBounce: boolean,
     isAfterPause: boolean,
   ): CharRecord {
     return {
@@ -363,10 +290,10 @@ export class KeyMonitor {
       charIndex,
       keydownAt,
       keyupAt: null,
-      iki,
+      kdToKd,
+      kuToKd,
       holdDuration: null,
-      isSameKeyDoubleDown,
-      suspicionScore,
+      isBounce,
       isAfterPause,
     };
   }
