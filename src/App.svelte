@@ -224,7 +224,7 @@
       '',
       '## Global Event Log',
       '```csv',
-      globalCsvLines.join('\\n'),
+      globalCsvLines.join('\n'),
       '```',
       ''
     ];
@@ -233,7 +233,7 @@
       markdownParts.push(
         `## Watched Key Event Log (${monitor.watchedKeyCode})`,
         '```csv',
-        watchedCsvLines.join('\\n'),
+        watchedCsvLines.join('\n'),
         '```',
         ''
       );
@@ -245,7 +245,7 @@
       );
     }
 
-    const text = markdownParts.join('\\n');
+    const text = markdownParts.join('\n');
     try {
       await navigator.clipboard.writeText(text);
       isCopied = true;
