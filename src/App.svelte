@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { KeyMonitor, PAUSE_THRESHOLD_MS } from './lib/keyMonitor.svelte.js';
-  import type { CharRecord, KeyEventRecord } from './lib/types.js';
+  import type { CharRecord, KeyEventRecord, WatchedKeyEvent } from './lib/types.js';
 
   // ─── State ─────────────────────────────────────────────────────────────────
 
@@ -12,7 +12,10 @@
   let suspiciousOnly = $state(false);
 
   let logScrollEl = $state<HTMLElement | undefined>(undefined);
+  let watchScrollEl = $state<HTMLElement | undefined>(undefined);
   let typingEl = $state<HTMLElement | undefined>(undefined);
+
+  let watchCapturing = $state(false);
 
   // ─── Derived display data ───────────────────────────────────────────────────
 
@@ -30,6 +33,16 @@
     tick().then(() => {
       if (logScrollEl) {
         logScrollEl.scrollTop = logScrollEl.scrollHeight;
+      }
+    });
+  });
+
+  // Auto-scroll watch log on new events
+  $effect(() => {
+    void monitor.watchedKeyEvents.length;
+    tick().then(() => {
+      if (watchScrollEl) {
+        watchScrollEl.scrollTop = watchScrollEl.scrollHeight;
       }
     });
   });
@@ -138,6 +151,46 @@
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Tab') e.preventDefault();
     monitor.handleKeydown(e);
+  }
+
+  // ─── Key watcher capture ────────────────────────────────────────────────────
+
+  function startWatchCapture() {
+    watchCapturing = true;
+    window.addEventListener(
+      'keydown',
+      (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          watchCapturing = false;
+          tick().then(() => typingEl?.focus());
+          return;
+        }
+        // Intercept during capture phase so the key isn't also typed into the textarea
+        e.stopPropagation();
+        monitor.setWatchedKey(e.code);
+        watchCapturing = false;
+        tick().then(() => typingEl?.focus());
+      },
+      { capture: true, once: true },
+    );
+  }
+
+  // ─── Watch row helpers ──────────────────────────────────────────────────────
+
+  function getWatchClass(ev: WatchedKeyEvent): string {
+    if (ev.kind === 'keyup') return 'watch-keyup';
+    if (ev.kuToKd !== null && ev.kuToKd < 20) return 'watch-bounce';
+    if (ev.kuToKd !== null && ev.kuToKd < 50) return 'watch-warn';
+    if (ev.kdToKd !== null && ev.kdToKd < 25) return 'watch-bounce';
+    return 'watch-normal';
+  }
+
+  function fmtWatchFlag(ev: WatchedKeyEvent): string {
+    if (ev.kind === 'keyup') return '';
+    if (ev.kuToKd !== null && ev.kuToKd < 20) return '⚡ BOUNCE';
+    if (ev.kuToKd !== null && ev.kuToKd < 50) return '~ suspicious';
+    if (ev.kdToKd !== null && ev.kdToKd < 25) return '⚡ BOUNCE';
+    return '';
   }
 
   onMount(() => {
@@ -436,6 +489,80 @@
         >type to populate chart…</text>
       {/if}
     </svg>
+  </div>
+
+  <!-- ═══ KEY WATCHER ══════════════════════════════════════════════════════ -->
+  <div class="watch-panel">
+    <div class="panel-head watch-head">
+      <span class="panel-label">KEY WATCHER</span>
+
+      {#if monitor.watchedKeyCode}
+        <span class="watch-badge">
+          {monitor.watchedKeyCode}
+          <button class="watch-badge-x" onclick={() => monitor.clearWatchedKey()}>×</button>
+        </span>
+      {/if}
+
+      {#if watchCapturing}
+        <span class="watch-capturing">press any key… (Esc to cancel)</span>
+      {:else}
+        <button class="btn-watch" onclick={startWatchCapture}>
+          {monitor.watchedKeyCode ? '⊙ Change Key' : '⊙ Set Watch Key'}
+        </button>
+      {/if}
+
+      {#if monitor.watchedKeyCode}
+        <span class="watch-hint">
+          KD→KD: keydown interval · KU→KD: release-to-refire gap · bounce if KU→KD &lt; 20ms
+        </span>
+      {/if}
+    </div>
+
+    {#if monitor.watchedKeyCode}
+      <div class="watch-scroll" bind:this={watchScrollEl}>
+        {#if monitor.watchedKeyEvents.length === 0}
+          <div class="log-empty">
+            Watching <strong>{monitor.watchedKeyCode}</strong> — press the key to record events…
+          </div>
+        {:else}
+          <div class="watch-header-row">
+            <span>Time</span>
+            <span>↕</span>
+            <span>KD→KD</span>
+            <span>KU→KD</span>
+            <span>Hold</span>
+            <span></span>
+          </div>
+          {#each monitor.watchedKeyEvents as ev (ev.id)}
+            {@const cls = getWatchClass(ev)}
+            {@const flag = fmtWatchFlag(ev)}
+            <div
+              class="watch-row"
+              class:watch-normal={cls === 'watch-normal'}
+              class:watch-keyup={cls === 'watch-keyup'}
+              class:watch-warn={cls === 'watch-warn'}
+              class:watch-bounce={cls === 'watch-bounce'}
+            >
+              <span class="l-time">{fmtWallTime(ev.wallTime)}</span>
+              <span class="l-arrow">{ev.kind === 'keydown' ? '↓' : '↑'}</span>
+              <span class="w-kdkd">{ev.kdToKd !== null ? `${ev.kdToKd.toFixed(1)}ms` : '—'}</span>
+              <span class="w-kukd">{ev.kuToKd !== null ? `${ev.kuToKd.toFixed(1)}ms` : '—'}</span>
+              <span class="w-hold">{ev.holdDuration !== null ? `${ev.holdDuration.toFixed(1)}ms` : '—'}</span>
+              {#if flag}
+                <span class="l-flag">{flag}</span>
+              {:else}
+                <span></span>
+              {/if}
+            </div>
+          {/each}
+        {/if}
+      </div>
+    {:else}
+      <div class="watch-empty">
+        No key selected — click <strong>Set Watch Key</strong> then press the suspected key.
+        Tracks KD→KD (keydown-to-keydown) and KU→KD (release-to-refire) timing for that key only.
+      </div>
+    {/if}
   </div>
 
 </div>
@@ -861,4 +988,141 @@
     height: 54px;
     display: block;
   }
+
+  /* ── Key Watcher panel ───────────────────────────────────────────────── */
+  .watch-panel {
+    border-top: 1px solid var(--border-base);
+    background: var(--bg-panel);
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    max-height: 190px;
+  }
+
+  .watch-head {
+    gap: 8px;
+    flex-wrap: nowrap;
+  }
+
+  .watch-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--blue-dim);
+    border: 1px solid rgba(68, 102, 255, 0.35);
+    border-radius: var(--radius);
+    padding: 1px 6px 1px 8px;
+    font-size: 10px;
+    color: var(--blue);
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+  }
+
+  .watch-badge-x {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+    transition: color 0.15s;
+  }
+
+  .watch-badge-x:hover { color: var(--danger); }
+
+  .watch-capturing {
+    font-size: 10px;
+    color: var(--warn);
+    font-weight: 600;
+    animation: pulse-online 0.8s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+
+  .btn-watch {
+    padding: 3px 10px;
+    background: transparent;
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius);
+    color: var(--text-muted);
+    font-family: var(--font);
+    font-size: 10px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+    flex-shrink: 0;
+  }
+
+  .btn-watch:hover {
+    border-color: var(--blue);
+    color: var(--blue);
+  }
+
+  .watch-hint {
+    font-size: 9px;
+    color: var(--text-dim);
+    margin-left: auto;
+    font-style: italic;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .watch-empty {
+    padding: 8px 16px;
+    color: var(--text-void);
+    font-size: 10.5px;
+    font-style: italic;
+  }
+
+  .watch-empty strong { color: var(--text-dim); font-style: normal; }
+
+  .watch-scroll {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  .watch-header-row {
+    display: grid;
+    grid-template-columns: 82px 14px 78px 78px 72px 1fr;
+    gap: 5px;
+    padding: 3px 10px 3px 8px;
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 8.5px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    background: var(--bg-raised);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .watch-row {
+    display: grid;
+    grid-template-columns: 82px 14px 78px 78px 72px 1fr;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 10px 2px 8px;
+    border-left: 2px solid transparent;
+    border-bottom: 1px solid var(--bg-base);
+    font-size: 10.5px;
+    min-height: 20px;
+    transition: background 0.1s;
+  }
+
+  .watch-row:hover { background: rgba(255, 255, 255, 0.015); }
+
+  .watch-normal { border-left-color: transparent; }
+  .watch-keyup  { border-left-color: transparent; opacity: 0.38; }
+  .watch-warn   { border-left-color: var(--warn-border);    background: var(--warn-dim); }
+  .watch-bounce { border-left-color: var(--danger-border);  background: var(--danger-dim); }
+
+  .w-kdkd { color: var(--text-muted); font-size: 10px; }
+  .w-kukd { color: var(--text-bright); font-size: 10px; font-weight: 600; }
+  .w-hold { color: var(--text-dim); font-size: 9.5px; }
+
+  .watch-bounce .w-kukd { color: var(--danger); }
+  .watch-warn   .w-kukd { color: var(--warn); }
 </style>

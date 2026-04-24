@@ -1,4 +1,4 @@
-import type { CharRecord, IKIStats, KeyEventRecord } from './types.js';
+import type { CharRecord, IKIStats, KeyEventRecord, WatchedKeyEvent } from './types.js';
 import { mean, stdev, computeSuspicionScore, ikiToWPM } from './stats.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -62,6 +62,12 @@ export class KeyMonitor {
    */
   ikiWindowByCode = $state<Map<string, number[]>>(new Map());
 
+  /** The key code currently being watched (e.g. 'Space', 'KeyA'), or null if none. */
+  watchedKeyCode = $state<string | null>(null);
+
+  /** All events recorded for the watched key, in chronological order. */
+  watchedKeyEvents = $state<WatchedKeyEvent[]>([]);
+
   // ── Derived stats ────────────────────────────────────────────────────────
 
   /**
@@ -100,6 +106,9 @@ export class KeyMonitor {
   #lastKeydownTime: number | null = null;
   #charCounter = 0;
   #eventCounter = 0;
+  #watchedLastKeydownTime: number | null = null;
+  #watchedLastKeyupTime: number | null = null;
+  #watchedEventCounter = 0;
 
   // ── Public methods ────────────────────────────────────────────────────────
 
@@ -210,6 +219,26 @@ export class KeyMonitor {
     if (producesChar) {
       this.#lastKeydownTime = now;
     }
+
+    // ── Watched key tracking ──────────────────────────────────────────────
+    if (this.watchedKeyCode !== null && ev.code === this.watchedKeyCode) {
+      const kdToKd = this.#watchedLastKeydownTime !== null
+        ? now - this.#watchedLastKeydownTime
+        : null;
+      const kuToKd = this.#watchedLastKeyupTime !== null
+        ? now - this.#watchedLastKeyupTime
+        : null;
+      this.watchedKeyEvents.push({
+        id: `w-kd-${this.#watchedEventCounter++}`,
+        kind: 'keydown',
+        timestamp: now,
+        wallTime: Date.now(),
+        kdToKd,
+        kuToKd,
+        holdDuration: null,
+      });
+      this.#watchedLastKeydownTime = now;
+    }
   }
 
   handleKeyup(ev: KeyboardEvent): void {
@@ -245,6 +274,20 @@ export class KeyMonitor {
       suspicionScore: 0,
       charIndex: active.charIndex,
     });
+
+    // ── Watched key tracking ──────────────────────────────────────────────
+    if (this.watchedKeyCode !== null && ev.code === this.watchedKeyCode) {
+      this.watchedKeyEvents.push({
+        id: `w-ku-${this.#watchedEventCounter++}`,
+        kind: 'keyup',
+        timestamp: now,
+        wallTime: Date.now(),
+        kdToKd: null,
+        kuToKd: null,
+        holdDuration,
+      });
+      this.#watchedLastKeyupTime = now;
+    }
   }
 
   clear(): void {
@@ -253,10 +296,30 @@ export class KeyMonitor {
     this.typedText = '';
     this.ikiWindow = [];
     this.ikiWindowByCode.clear();
+    this.watchedKeyEvents = [];
+    this.#watchedLastKeydownTime = null;
+    this.#watchedLastKeyupTime = null;
+    // Note: watchedKeyCode intentionally not reset — user keeps their watch across session clears
     this.#activeKeys.clear();
     this.#lastKeydownTime = null;
     this.#charCounter = 0;
     // Note: #eventCounter intentionally not reset — IDs stay unique across sessions
+  }
+
+  /** Start watching a specific key by its code (e.g. 'Space', 'KeyA'). Clears prior watch data. */
+  setWatchedKey(code: string): void {
+    this.watchedKeyCode = code;
+    this.watchedKeyEvents = [];
+    this.#watchedLastKeydownTime = null;
+    this.#watchedLastKeyupTime = null;
+  }
+
+  /** Stop watching and discard all watch data. */
+  clearWatchedKey(): void {
+    this.watchedKeyCode = null;
+    this.watchedKeyEvents = [];
+    this.#watchedLastKeydownTime = null;
+    this.#watchedLastKeyupTime = null;
   }
 
   // ── Private helpers ───────────────────────────────────────────────────────
