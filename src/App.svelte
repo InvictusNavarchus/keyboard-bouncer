@@ -193,6 +193,69 @@
     return '';
   }
 
+  let isCopied = $state(false);
+
+  async function copyDataToClipboard() {
+    const globalCsvLines = ['time,kind,key,code,iki_ms,hold_ms,flag'];
+    for (const ev of monitor.events) {
+      const time = fmtWallTime(ev.wallTime);
+      const kind = ev.kind === 'keydown' ? 'DN' : 'UP';
+      const key = fmtKey(ev.key).replace(/"/g, '""');
+      const code = ev.code;
+      const iki = ev.iki !== null ? ev.iki.toFixed(1) : '';
+      const hold = ev.holdDuration !== null ? ev.holdDuration.toFixed(1) : '';
+      const flag = getSuspicionLabel(ev).replace(/"/g, '""');
+      globalCsvLines.push(`"${time}","${kind}","${key}","${code}","${iki}","${hold}","${flag}"`);
+    }
+
+    const watchedCsvLines = ['time,kind,kd_to_kd_ms,ku_to_kd_ms,hold_ms,flag'];
+    for (const ev of monitor.watchedKeyEvents) {
+      const time = fmtWallTime(ev.wallTime);
+      const kind = ev.kind === 'keydown' ? 'DN' : 'UP';
+      const kdToKd = ev.kdToKd !== null ? ev.kdToKd.toFixed(1) : '';
+      const kuToKd = ev.kuToKd !== null ? ev.kuToKd.toFixed(1) : '';
+      const hold = ev.holdDuration !== null ? ev.holdDuration.toFixed(1) : '';
+      const flag = fmtWatchFlag(ev).replace(/"/g, '""');
+      watchedCsvLines.push(`"${time}","${kind}","${kdToKd}","${kuToKd}","${hold}","${flag}"`);
+    }
+
+    const markdownParts = [
+      '# Keyboard Bouncer Data Export',
+      '',
+      '## Global Event Log',
+      '```csv',
+      globalCsvLines.join('\\n'),
+      '```',
+      ''
+    ];
+
+    if (monitor.watchedKeyCode) {
+      markdownParts.push(
+        `## Watched Key Event Log (${monitor.watchedKeyCode})`,
+        '```csv',
+        watchedCsvLines.join('\\n'),
+        '```',
+        ''
+      );
+    } else {
+      markdownParts.push(
+        '## Watched Key Event Log',
+        '*No key watch feature was active during this recording.*',
+        ''
+      );
+    }
+
+    const text = markdownParts.join('\\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      isCopied = true;
+      setTimeout(() => (isCopied = false), 2000);
+    } catch (err) {
+      console.error('Failed to copy', err);
+      alert('Failed to copy data to clipboard');
+    }
+  }
+
   onMount(() => {
     typingEl?.focus();
   });
@@ -269,9 +332,14 @@
       </div>
     </div>
 
-    <button class="btn-clear" onclick={() => monitor.clear()}>
-      ⌫ Clear
-    </button>
+    <div class="header-actions">
+      <button class="btn-copy" class:is-copied={isCopied} onclick={copyDataToClipboard}>
+        {isCopied ? '✓ Copied' : '📋 Copy Data'}
+      </button>
+      <button class="btn-clear" onclick={() => monitor.clear()}>
+        ⌫ Clear
+      </button>
+    </div>
   </header>
 
   <!-- ═══ MAIN ════════════════════════════════════════════════════════════ -->
@@ -704,6 +772,39 @@
     border-color: var(--danger-border);
     color: var(--danger);
     background: var(--danger-dim);
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .btn-copy {
+    flex-shrink: 0;
+    padding: 5px 14px;
+    background: transparent;
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-md);
+    color: var(--text-muted);
+    font-family: var(--font);
+    font-size: 11.5px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+    letter-spacing: 0.3px;
+  }
+
+  .btn-copy:hover {
+    border-color: var(--blue-border, rgba(68,102,255,0.4));
+    color: var(--blue, #4466ff);
+    background: var(--blue-dim, rgba(68,102,255,0.1));
+  }
+
+  .btn-copy.is-copied {
+    border-color: var(--green, #2ecc71);
+    color: var(--green, #2ecc71);
+    background: rgba(46, 204, 113, 0.1);
   }
 
   /* ── Main area ───────────────────────────────────────────────────────── */
