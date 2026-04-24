@@ -93,8 +93,9 @@ export class KeyMonitor {
   // ── Public methods ────────────────────────────────────────────────────────
 
   handleKeydown(ev: KeyboardEvent): void {
+    if (ev.repeat) return;
     const now = performance.now();
-    const isModified = ev.ctrlKey || ev.metaKey || ev.altKey;
+    const isModified = ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey;
     const isNonChar = NON_CHAR_KEYS.has(ev.key);
     const producesChar = !isModified && !isNonChar && ev.key !== 'Backspace' && ev.key !== 'Tab';
 
@@ -111,7 +112,7 @@ export class KeyMonitor {
     }
 
     // Only include char-producing key intervals in the speed window
-    if (iki !== null && !isNonChar && !isModified) {
+    if (iki !== null && producesChar) {
       this.ikiWindow.push(iki);
       if (this.ikiWindow.length > IKI_WINDOW_SIZE) {
         this.ikiWindow.shift();
@@ -124,15 +125,26 @@ export class KeyMonitor {
     // ── Suspicion score ───────────────────────────────────────────────────
     const stats = this.ikiStats;
     const suspicionScore =
-      iki !== null
-        ? computeSuspicionScore({
-            iki,
-            meanIKI: stats?.mean ?? 0,
-            stdevIKI: stats?.stdev ?? 0,
-            isSameKeyDoubleDown,
-            hasSufficientSamples: (stats?.sampleCount ?? 0) >= MIN_SAMPLES,
-          })
-        : 0;
+      isSameKeyDoubleDown
+        ? Math.max(
+            computeSuspicionScore({
+              iki: iki ?? 0,
+              meanIKI: stats?.mean ?? 0,
+              stdevIKI: stats?.stdev ?? 0,
+              isSameKeyDoubleDown,
+              hasSufficientSamples: (stats?.sampleCount ?? 0) >= MIN_SAMPLES,
+            }),
+            0.85,
+          )
+        : iki !== null
+          ? computeSuspicionScore({
+              iki,
+              meanIKI: stats?.mean ?? 0,
+              stdevIKI: stats?.stdev ?? 0,
+              isSameKeyDoubleDown,
+              hasSufficientSamples: (stats?.sampleCount ?? 0) >= MIN_SAMPLES,
+            })
+          : 0;
 
     // ── Handle text editing ───────────────────────────────────────────────
     let charIndex: number | null = null;
@@ -175,7 +187,9 @@ export class KeyMonitor {
 
     // ── Update tracking state ─────────────────────────────────────────────
     this.#activeKeys.set(ev.code, { keydownTimestamp: now, charIndex });
-    this.#lastKeydownTime = now;
+    if (producesChar) {
+      this.#lastKeydownTime = now;
+    }
   }
 
   handleKeyup(ev: KeyboardEvent): void {
